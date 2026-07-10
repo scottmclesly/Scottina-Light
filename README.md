@@ -45,7 +45,7 @@ and it is enforced in the code rather than left to good intentions — see
 
 | | |
 |---|---|
-| Board | Seeed Wio Terminal (`seeed_wio_terminal`) |
+| Board | [Seeed Wio Terminal](https://amzn.to/3SYBvaE) |
 | MCU | ATSAMD51P19 — 512 KB flash, 256 KB RAM |
 | Display | 320×240 TFT |
 | Input | 5-way switch + 3 buttons (A / B / C) |
