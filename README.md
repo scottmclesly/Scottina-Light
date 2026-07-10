@@ -1,3 +1,4 @@
+<img width="2567" height="1925" alt="ScottinaLight" src="https://github.com/user-attachments/assets/cb5c6ab0-3069-42e9-82da-f95d00921cec" />
 # Scottina Light
 
 **Pocket digital beast of burden.** A standalone diagnostics instrument for the
