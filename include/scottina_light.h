@@ -150,7 +150,38 @@ bool refresh();
 uint32_t totalMB();
 uint32_t freeMB();
 bool ensureDir(const char *path);
+
+// Boot-time sweep of `*.partial` staging files left by a dock PUT that lost
+// power before its COMMIT (DOCK-PROTOCOL.md §4). Atomic rename is the strongest
+// primitive FAT offers -- there is no journal -- so this sweep is what makes a
+// mid-PUT power loss invisible rather than cumulative. Returns the count swept.
+uint8_t sweepPartials();
 } // namespace storage
+
+// ---------------------------------------------------------------------------
+// Wall clock  (DOCK-PROTOCOL.md §4 SET_CLOCK)
+// ---------------------------------------------------------------------------
+//
+// Light has NO battery-backed RTC. Standalone, it has no idea what time it is,
+// which is why its SD logs are timestamped in seconds-since-power-on and are
+// useless for fusion with anything Prime saw. Docking is what fixes that.
+//
+// NB: nothing here may be named `RTC` -- CMSIS defines it as an object-like
+// macro in samd51p19a.h and the preprocessor does not respect namespace scope.
+
+namespace wallclock {
+
+// Quality is carried, never inferred. A clock Prime could not vouch for is
+// LABELLED as such and written into the log header that way -- never laundered
+// into the record as truth.
+void set(uint64_t epoch, uint8_t quality);
+
+uint64_t now();      // unix seconds; 0 if never set this power cycle
+uint8_t quality();   // 0 unsynced | 1 rtc | 2 ntp
+bool setThisBoot();
+const char *qualityName();
+
+} // namespace wallclock
 
 // ---------------------------------------------------------------------------
 // Config  (TODO §1: three tiers)
@@ -194,6 +225,27 @@ void close();
 uint32_t bytesWritten();
 const char *path();
 bool spaceExhausted();
+
+// --- dock quiesce (DOCK-PROTOCOL.md §6) ------------------------------------
+//
+// The FS layer permits exactly ONE open file at a time -- Seeed_FS.h says so
+// outright: "Note that currently only one file can be open at a time." So the
+// dock cannot serve a GET while the logger holds the handle. "Rotate and keep
+// logging" is not merely undesirable, it is impossible; a dock session must
+// SUSPEND logging outright.
+//
+// The cost is real and it is stated, never silent: HELLO reports the suspension,
+// and resume() opens a FRESH file whose header records the gap and the clock
+// that was pushed. This is the honest version of the same cost USB mass-storage
+// would have imposed invisibly -- and unlike MSC there is no two-writer hazard,
+// because firmware mediates every byte.
+
+void suspendForDock();
+// Reopens into a fresh file, stamped with the dock gap and the current clock.
+// Called on BYE and by the 10 s watchdog -- a yanked cable must NEVER leave the
+// black box switched off.
+void resumeAfterDock();
+bool suspendedByDock();
 } // namespace logger
 
 // ---------------------------------------------------------------------------

@@ -142,11 +142,16 @@ The card is optional — the firmware boots and scans without one — but it is
 where config and captures live. Directories are created on first mount.
 
 ```
-/config.json          Tier 3: authored off-device
+/config.json          Tier 3: authored off-device (or pushed by the dock)
 /config/i2c.json      Tier 2: persisted I²C disambiguation choices
 /config/ui.json       Tier 2: persisted theme
 /logs/*.log           raw captures
+/tables/*.json        decode tables, pushed by the dock
 ```
+
+The dock may write only `/tables/` and `/config.json`, may read only `/logs/`,
+and may delete only `/logs/` — and only against a verified hash. Tier-2 files are
+the user's own on-device choices and are not readable over the dock at all.
 
 ### `/config.json`
 
@@ -236,6 +241,49 @@ transaction to absorb that false positive, and it must run before anything scans
 macros in `samd51p19a.h`, and the preprocessor does not respect enum scope.
 
 ---
+
+## Docking
+
+Light has **no battery-backed RTC**. Standalone, it does not know what time it
+is, so its SD logs are stamped in seconds-since-power-on — useless for lining up
+against anything Scottina Prime saw. Docking is what fixes that.
+
+Plug Light into Prime over USB and a sync runs itself: Prime pushes the wall
+clock, pushes the enabled decode tables into `/tables/`, and pulls the black-box
+logs off the card. Prime always wins — nothing is ever edited on Light, and a
+stale table is overwritten rather than merged. You watch; you don't drive.
+
+The wire contract is [`DOCK-PROTOCOL.md`](DOCK-PROTOCOL.md), mirrored verbatim in
+the kilodash repo. Three things are worth knowing without reading it:
+
+- **Diagnostics only, still.** The dock is provisioning and retrieval: it can set
+  the clock, write tables, and read *closed* logs. It cannot trigger
+  transmission, start a capture, or execute anything — see
+  [`include/scope.h`](include/scope.h). Docking does not weaken that contract.
+- **Docking suspends logging, and says so.** The SD layer permits exactly one
+  open file at a time, so the dock cannot serve a log file while the logger holds
+  the handle. A dock session therefore closes the active capture and reopens a
+  fresh one on `BYE`. The gap is written into the new file's header, along with
+  the clock epoch and its **quality** (`ntp` / `rtc` / `unsynced`) — a clock Prime
+  could not vouch for is labelled as such, never laundered into the record as
+  truth. A 10 s watchdog resumes logging if the cable is yanked mid-session, so a
+  dead dock can never leave the black box switched off.
+- **A delete is verified or it does not happen.** Logs are only unlinked after
+  Prime returns the sha256 of what it actually received and Light agrees. A pull
+  that verifies nothing is a copy; a delete that verifies nothing is data loss.
+
+Nothing on Light *reads* `/tables/` yet — the decode layer is not written — so a
+successful table push has no visible effect on the device. That is correct: the
+dock provisions ahead of its consumer.
+
+The protocol's conformance vectors live in
+[`dock-vectors.json`](dock-vectors.json) and are shared with kilodash. The frame
+codec and the path reject-pass are free of Arduino and SD so they run against all
+47 of them on a laptop:
+
+```bash
+pio test -e native
+```
 
 ## Relationship to Scottina
 

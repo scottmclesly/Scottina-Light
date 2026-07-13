@@ -1,6 +1,7 @@
 // Scottina Light -- standalone diagnostics instrument, Wio Terminal sibling of
 // the Scottina front panel. Read include/scope.h before adding anything.
 
+#include "dock.h"
 #include "scottina_light.h"
 
 #include "SD/Seeed_SD.h"
@@ -188,11 +189,21 @@ void setup() {
 }
 
 void loop() {
+  const uint32_t now = millis();
+
+  // The dock drains Serial FIRST, and this ordering is load-bearing rather than
+  // stylistic. On an SL_TEST_HOOK build, input::poll() reads any available byte
+  // and SWALLOWS the ones it does not recognise (core_ui.cpp, `default: break`),
+  // so if it ran first it would quietly eat the frame stream one byte at a time.
+  // A high-bit SOF is necessary to avoid the hook's alphabet; it is nowhere near
+  // sufficient to survive the hook's appetite.
+  dock::tick(now);
+
   const Btn b = input::poll();
   if (b != Btn::None) {
     Serial.print("BTN ");
     Serial.println(btnName(b));
     ui::dispatch(b);
   }
-  ui::tick(millis());
+  ui::tick(now);
 }

@@ -30,6 +30,11 @@ bool begin() {
   if (s_mounted) {
     ensureDir("/logs");
     ensureDir("/config");
+    // The dock pushes decode tables here. Nothing on Light READS them yet -- the
+    // decode layer is not written -- so the dock deliberately provisions ahead
+    // of its consumer. A successful table push with no visible effect is correct.
+    ensureDir("/tables");
+    sweepPartials();
   }
   return s_mounted;
 }
@@ -68,7 +73,89 @@ bool ensureDir(const char *path) {
   return SD.mkdir(path);
 }
 
+uint8_t sweepPartials() {
+  if (!s_mounted) return 0;
+
+  // Only /tables/ can hold staging files -- it is the sole writable directory
+  // the dock exposes besides /config.json, whose .partial sits at the root.
+  const char *const dirs[] = {"/tables", "/"};
+  uint8_t swept = 0;
+
+  for (uint8_t d = 0; d < 2; ++d) {
+    // Collect first, unlink after: the one-open-file rule means we cannot hold
+    // the directory handle open while removing entries out from under it.
+    char doomed[8][64];
+    uint8_t n = 0;
+
+    File dir = SD.open(dirs[d]);
+    if (!dir) continue;
+    for (File f = dir.openNextFile(); f && n < 8; f = dir.openNextFile()) {
+      const char *nm = f.name();
+      const size_t len = nm ? strlen(nm) : 0;
+      const bool isPartial = len > 8 && strcmp(nm + len - 8, ".partial") == 0;
+      if (isPartial && !f.isDirectory()) {
+        snprintf(doomed[n], sizeof(doomed[n]), "%s%s%s", dirs[d],
+                 (strcmp(dirs[d], "/") == 0) ? "" : "/", nm);
+        n++;
+      }
+      f.close();
+    }
+    dir.close();
+
+    for (uint8_t i = 0; i < n; ++i) {
+      if (SD.remove(doomed[i])) {
+        Serial.print("[dock] swept stale staging file ");
+        Serial.println(doomed[i]);
+        swept++;
+      }
+    }
+  }
+  return swept;
+}
+
 } // namespace storage
+
+// ---------------------------------------------------------------------------
+// Wall clock
+// ---------------------------------------------------------------------------
+
+namespace wallclock {
+
+namespace {
+uint64_t s_baseEpoch = 0; // epoch at the moment SET_CLOCK landed
+uint32_t s_baseMs = 0;    // millis() at that same moment
+uint8_t s_quality = 0;
+bool s_set = false;
+} // namespace
+
+void set(uint64_t epoch, uint8_t quality) {
+  s_baseEpoch = epoch;
+  s_baseMs = millis();
+  s_quality = quality;
+  s_set = true;
+}
+
+uint64_t now() {
+  if (!s_set) return 0;
+  // millis() wraps at ~49 days. Unsigned subtraction wraps with it, so the
+  // delta stays correct across a single wrap -- which is far longer than any
+  // capture this instrument is designed for.
+  const uint32_t delta = millis() - s_baseMs;
+  return s_baseEpoch + (uint64_t)(delta / 1000UL);
+}
+
+uint8_t quality() { return s_quality; }
+bool setThisBoot() { return s_set; }
+
+const char *qualityName() {
+  switch (s_quality) {
+  case 1: return "rtc";
+  case 2: return "ntp";
+  default: return "unsynced";
+  }
+}
+
+} // namespace wallclock
 
 // ---------------------------------------------------------------------------
 // Config
@@ -366,6 +453,57 @@ void close() {
 uint32_t bytesWritten() { return s_bytes; }
 const char *path() { return s_path; }
 bool spaceExhausted() { return s_exhausted; }
+
+// --- dock quiesce -----------------------------------------------------------
+
+namespace {
+bool s_dockSuspended = false;
+uint32_t s_suspendedAtMs = 0;
+} // namespace
+
+void suspendForDock() {
+  if (s_dockSuspended) return;
+  s_dockSuspended = true;
+  s_suspendedAtMs = millis();
+
+  // Only meaningful if a capture was actually running. If it wasn't, we still
+  // latch the flag so resume() knows not to invent a file that never existed.
+  if (!s_open) return;
+
+  close(); // hands the single file handle to the dock
+  Serial.println("[dock] logging suspended -- the dock needs the file handle");
+}
+
+void resumeAfterDock() {
+  if (!s_dockSuspended) return;
+  const uint32_t gapMs = millis() - s_suspendedAtMs;
+  s_dockSuspended = false;
+
+  // s_prefix is empty if no capture was ever running; nothing to resume.
+  if (s_prefix[0] == '\0') return;
+  if (!storage::mounted()) return;
+
+  if (!open(s_prefix)) {
+    Serial.println("[dock] WARNING: could not resume logging after dock");
+    return;
+  }
+
+  // The gap goes INTO the record. Forensics must be able to see that these
+  // bytes were written after a dock, and what clock they are being stamped
+  // with -- a clock Prime may itself have labelled 'unsynced'.
+  char hdr[128];
+  snprintf(hdr, sizeof(hdr), "# resumed after dock: %lu ms gap", (unsigned long)gapMs);
+  writeLine(hdr);
+  snprintf(hdr, sizeof(hdr), "# clock: epoch=%llu source=%s",
+           (unsigned long long)wallclock::now(), wallclock::qualityName());
+  writeLine(hdr);
+  flush();
+
+  Serial.print("[dock] logging resumed -> ");
+  Serial.println(s_path);
+}
+
+bool suspendedByDock() { return s_dockSuspended; }
 
 } // namespace logger
 

@@ -1,5 +1,7 @@
 #include "scottina_light.h"
 
+#include "dock.h"
+
 // ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
@@ -53,7 +55,14 @@ Btn poll() {
 #ifdef SL_TEST_HOOK
   // Drive the UI over serial so navigation can be exercised without hands on
   // the device. Diagnostics build only.
-  if (Serial.available()) {
+  //
+  // Once the dock owns the port, this reader must not touch Serial AT ALL. Note
+  // what it does below with a byte it does not recognise: `default: break` --
+  // it consumes the byte and drops it on the floor. Pointed at a frame stream
+  // that behaviour is not a collision, it is a shredder. main.cpp calls
+  // dock::tick() before us so frames are drained first; this guard is the
+  // second lock on the same door.
+  if (!dock::active() && Serial.available()) {
     switch (Serial.read()) {
     case 'a': return Btn::A;
     case 'b': return Btn::B;
