@@ -55,6 +55,23 @@ def main():
     if not _PORT_TARGETS.intersection(COMMAND_LINE_TARGETS):
         return  # a build, a test, a clean -- nothing here opens a port
 
+    # An explicit --upload-port (or upload_port in the ini) is a decision, and
+    # this hook does not get to overrule it. The guard exists to stop PlatformIO
+    # GUESSING; naming a port is not guessing. Report what it is, then stand down.
+    explicit = env.subst("$UPLOAD_PORT")  # noqa: F821
+    if explicit:
+        hw = ""
+        for p in list_serial_ports():
+            if _dev(p) == explicit:
+                hw = _hwid(p)
+        if hw and f"VID:PID={LIGHT_VID}" not in hw:
+            print(f"[port] WARNING: {explicit} is {hw}")
+            print(f"[port] WARNING: that is NOT a Seeed device (VID {LIGHT_VID}).")
+            print("[port] Honouring your explicit port, but check the board.")
+        else:
+            print(f"[port] using explicitly requested {explicit}  {hw}")
+        return
+
     ports = list_serial_ports()
 
     ours = [p for p in ports if f"VID:PID={LIGHT_VID}" in _hwid(p)]
