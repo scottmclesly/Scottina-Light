@@ -107,6 +107,15 @@ wire format either. Run it whenever; it gates one function.
 hardware on a real bench. Should be undramatic. If it isn't, the vectors were
 incomplete, and *that* is the bug to fix.
 
+**Deferred to the next hardware session** (Light is off-bench):
+- Echo-sketch throughput. Only tunes Prime's chunk choice; `max_payload` is
+  negotiated in `HELLO`, so any number it produces is absorbed without a spec
+  change.
+- On-device replay of the vectors through the (now shim-proven) handler.
+- Confirming VID `2886:802d` with our own eyes. The board manifest declares it,
+  which corroborates Prime independently of Prime -- but a manifest is not an
+  enumeration.
+
 ### What runs in parallel
 
 After G0 and G1, **everything**. That is the entire point of the vectors.

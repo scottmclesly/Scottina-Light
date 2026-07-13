@@ -161,9 +161,10 @@ bool Reader::bytes(uint8_t *out, size_t n) {
   return true;
 }
 
-bool Reader::str(char *out, size_t outCap) {
+bool Reader::str(char *out, size_t outCap, size_t *declaredLen) {
   if (i_ + 1 > len_) { ok_ = false; return false; }
   const uint8_t n = b_[i_++];
+  if (declaredLen) *declaredLen = n;
   if (i_ + n > len_) { ok_ = false; i_ = len_; return false; }
   // A string longer than the destination is malformed, not truncatable: paths
   // are bounded and silently clipping one would change which file we touch.

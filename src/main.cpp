@@ -165,6 +165,11 @@ void setup() {
   splash::step("input");
   input::begin();
 
+  // Installs the dock's Serial+SD platform. The handler stays dormant until a
+  // valid framed request arrives; until then Light is exactly as standalone as
+  // it was before.
+  dock::begin();
+
   splash::step("i2c bus");
   // beginBus() absorbs the cold-begin phantom ACK before anything may scan.
   i2cbus::beginBus(Wire);

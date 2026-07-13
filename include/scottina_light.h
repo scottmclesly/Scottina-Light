@@ -246,6 +246,10 @@ void suspendForDock();
 // black box switched off.
 void resumeAfterDock();
 bool suspendedByDock();
+// Was a capture actually running when the dock arrived? Distinct from
+// suspendedByDock(): suspending nothing is not a suspension, and HELLO's flags
+// must not claim a cost that was never paid.
+bool wasActiveAtDock();
 } // namespace logger
 
 // ---------------------------------------------------------------------------

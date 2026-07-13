@@ -10,7 +10,9 @@
 #include <unity.h>
 
 #include "../../include/dock.h"
+#include "../../include/dock_platform.h"
 #include "../../lib/sha256/sha256.h"
+#include "fake_platform.h"
 #include "vectors_generated.h"
 
 using namespace dock;
@@ -332,6 +334,192 @@ void test_writer_overflow_latches(void) {
   TEST_ASSERT_EQUAL_size_t(4, w.size()); // and it did not scribble
 }
 
+// --- FULL PROTOCOL REPLAY ---------------------------------------------------
+//
+// The point of the shim. Every vector is stood up as a fake Light in exactly the
+// state the vector describes, the wire_in bytes are fed to the real handler, and
+// the bytes it writes back must equal the expected wire_out EXACTLY -- byte for
+// byte, CRC and all. No hardware, no SD card, no board on the bench.
+//
+// This is what makes "proven before the devices meet" true of the whole protocol
+// rather than only of the frame codec.
+
+static FakePlatform *g_fake = nullptr;
+
+static void standUp(const Vec &v) {
+  delete g_fake;
+  g_fake = new FakePlatform();
+
+  for (size_t i = 0; i < v.n_files; ++i) {
+    const VecFile &f = v.files[i];
+    g_fake->files.push_back({f.path, std::vector<uint8_t>(f.data, f.data + f.size)});
+  }
+  g_fake->sd = (v.sd_present != 0);
+  g_fake->proto = (uint16_t)v.proto_version;
+  g_fake->epoch = v.clock_epoch;
+  g_fake->qual = (uint8_t)v.clock_quality;
+  g_fake->setBoot = (v.clock_set_this_boot != 0);
+  g_fake->logWasActive = (v.logging_was_active != 0);
+  if (v.open_path) g_fake->openPath = v.open_path;
+
+  setPlatform(g_fake);
+  reset();
+}
+
+void test_replay_all_vectors(void) {
+  size_t replayed = 0;
+
+  for (size_t i = 0; i < N_VECTORS; ++i) {
+    const Vec &v = VECTORS[i];
+    standUp(v);
+
+    g_fake->give(v.wire_in, v.wire_in_len);
+    // Two ticks at the same instant: the first drains and answers, the second
+    // proves the handler is idempotent on an empty port and does not re-answer.
+    tick(1000);
+    tick(1000);
+
+    // Concatenate what the vector says Light should have said.
+    std::vector<uint8_t> want;
+    for (size_t j = 0; j < v.n_outs; ++j)
+      want.insert(want.end(), v.outs[j].bytes, v.outs[j].bytes + v.outs[j].len);
+
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(want.size(), g_fake->tx.size(), v.id);
+    if (!want.empty())
+      TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(want.data(), g_fake->tx.data(), want.size(), v.id);
+    replayed++;
+  }
+  TEST_ASSERT_EQUAL_size_t(N_VECTORS, replayed);
+}
+
+// COMMIT is the whole interruption story: no commit, no file. Verify BEFORE the
+// rename, never after -- a staged file that does not hash is not a file.
+void test_commit_renames_only_on_hash_match(void) {
+  const Vec *v = vec("commit");
+  TEST_ASSERT_NOT_NULL(v);
+  standUp(*v);
+
+  TEST_ASSERT_TRUE(g_fake->has("/tables/nmea2000-std.json.partial"));
+  g_fake->give(v->wire_in, v->wire_in_len);
+  tick(1000);
+
+  // Staged file is gone; the real one exists. Atomic rename, after the check.
+  TEST_ASSERT_FALSE(g_fake->has("/tables/nmea2000-std.json.partial"));
+  TEST_ASSERT_TRUE(g_fake->has("/tables/nmea2000-std.json"));
+}
+
+// A COMMIT whose hash does not match must not merely be refused -- it must leave
+// the GOOD file that is already there completely untouched. A bad push is not
+// allowed to become a corrupted table.
+void test_commit_hash_mismatch_preserves_existing_file(void) {
+  const Vec *v = vec("err-hash-mismatch-commit");
+  TEST_ASSERT_NOT_NULL(v);
+  standUp(*v);
+
+  FakePlatform::FFile *before = g_fake->find("/tables/nmea2000-std.json");
+  TEST_ASSERT_NOT_NULL_MESSAGE(before, "fixture should already hold a good table");
+  const std::vector<uint8_t> original = before->data;
+
+  g_fake->give(v->wire_in, v->wire_in_len);
+  tick(1000);
+
+  // The staged noise is unlinked -- it is not a file, and leaving it would only
+  // invite a retry to commit it.
+  TEST_ASSERT_FALSE(g_fake->has("/tables/nmea2000-std.json.partial"));
+
+  // And the destination is byte-for-byte what it was.
+  FakePlatform::FFile *after = g_fake->find("/tables/nmea2000-std.json");
+  TEST_ASSERT_NOT_NULL_MESSAGE(after, "a failed COMMIT must not delete the good file");
+  TEST_ASSERT_EQUAL_size_t(original.size(), after->data.size());
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(original.data(), after->data.data(), original.size());
+}
+
+// A PUT resuming across a redock: 24 bytes are already staged and the next chunk
+// arrives at offset 24 in a session that never saw offset 0. The expected offset
+// must come from the FILE, not from anything we remember -- the card is the only
+// honest record of how far a PUT got.
+void test_put_resumes_from_staged_size_not_memory(void) {
+  const Vec *v = vec("put-chunk-1");
+  TEST_ASSERT_NOT_NULL(v);
+  standUp(*v);
+
+  TEST_ASSERT_EQUAL_UINT32(24, g_fake->fileSize("/tables/nmea2000-std.json.partial"));
+  g_fake->give(v->wire_in, v->wire_in_len);
+  tick(1000);
+
+  TEST_ASSERT_EQUAL_UINT32(36, g_fake->fileSize("/tables/nmea2000-std.json.partial"));
+}
+
+// THE SCARY STEP. A delete that verifies nothing is data loss on a black box.
+void test_delete_unlinks_only_on_verified_hash(void) {
+  const Vec *ok = vec("delete-verified");
+  const Vec *bad = vec("err-hash-mismatch-delete");
+  TEST_ASSERT_NOT_NULL(ok);
+  TEST_ASSERT_NOT_NULL(bad);
+
+  standUp(*ok);
+  g_fake->give(ok->wire_in, ok->wire_in_len);
+  tick(1000);
+  TEST_ASSERT_FALSE_MESSAGE(g_fake->has("/logs/raw001.log"), "verified delete should unlink");
+
+  standUp(*bad);
+  const bool before = g_fake->has("/logs/raw001.log");
+  g_fake->give(bad->wire_in, bad->wire_in_len);
+  tick(1000);
+  TEST_ASSERT_TRUE_MESSAGE(before, "fixture should have the file");
+  TEST_ASSERT_TRUE_MESSAGE(g_fake->has("/logs/raw001.log"),
+                           "a delete whose hash does not match MUST NOT unlink");
+}
+
+// The reject pass, exercised through the wire rather than the API: a write aimed
+// at /logs/ must be refused, and must not create anything.
+void test_reject_pass_over_the_wire_creates_nothing(void) {
+  const Vec *v = vec("reject-write-to-logs");
+  TEST_ASSERT_NOT_NULL(v);
+  standUp(*v);
+
+  const size_t before = g_fake->files.size();
+  g_fake->give(v->wire_in, v->wire_in_len);
+  tick(1000);
+
+  TEST_ASSERT_EQUAL_size_t_MESSAGE(before, g_fake->files.size(),
+                                   "a rejected PUT must not stage anything");
+}
+
+// §6 + §5: a session that goes quiet must not leave the black box switched off.
+// This is the one place Light acts without being asked, and it is why.
+void test_watchdog_resumes_logging_after_silence(void) {
+  const Vec *v = vec("hello");
+  TEST_ASSERT_NOT_NULL(v);
+  standUp(*v);
+
+  g_fake->give(v->wire_in, v->wire_in_len);
+  tick(1000);
+  TEST_ASSERT_TRUE_MESSAGE(active(), "a valid frame should open a session");
+  TEST_ASSERT_TRUE_MESSAGE(g_fake->logSuspended, "docking suspends logging");
+
+  tick(1000 + 9000); // 9 s of silence -- not yet
+  TEST_ASSERT_TRUE(active());
+
+  tick(1000 + 10001); // past the 10 s watchdog
+  TEST_ASSERT_FALSE_MESSAGE(active(), "watchdog must end the session");
+  TEST_ASSERT_TRUE_MESSAGE(g_fake->logResumed, "watchdog MUST resume logging");
+  TEST_ASSERT_FALSE(g_fake->logSuspended);
+}
+
+// BYE hands the port back and restarts the logger -- the ordinary way out.
+void test_bye_resumes_logging(void) {
+  const Vec *v = vec("bye");
+  TEST_ASSERT_NOT_NULL(v);
+  standUp(*v);
+
+  g_fake->give(v->wire_in, v->wire_in_len);
+  tick(1000);
+
+  TEST_ASSERT_FALSE(active());
+  TEST_ASSERT_TRUE(g_fake->logResumed);
+}
+
 // ----------------------------------------------------------------------------
 
 int main(int, char **) {
@@ -355,6 +543,16 @@ int main(int, char **) {
   RUN_TEST(test_reader_short_payload_fails_closed);
   RUN_TEST(test_reader_overlong_string_fails_closed);
   RUN_TEST(test_writer_overflow_latches);
+
+  // Full protocol replay against the in-memory Light.
+  RUN_TEST(test_replay_all_vectors);
+  RUN_TEST(test_commit_renames_only_on_hash_match);
+  RUN_TEST(test_commit_hash_mismatch_preserves_existing_file);
+  RUN_TEST(test_put_resumes_from_staged_size_not_memory);
+  RUN_TEST(test_delete_unlinks_only_on_verified_hash);
+  RUN_TEST(test_reject_pass_over_the_wire_creates_nothing);
+  RUN_TEST(test_watchdog_resumes_logging_after_silence);
+  RUN_TEST(test_bye_resumes_logging);
   return UNITY_END();
 }
 

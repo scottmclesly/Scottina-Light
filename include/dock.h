@@ -133,7 +133,13 @@ public:
   bool bytes(uint8_t *out, size_t n);
   // Copies a length-prefixed string into `out` (NUL-terminated). Fails if the
   // string does not fit -- paths are bounded, so an over-long one is malformed.
-  bool str(char *out, size_t outCap);
+  //
+  // `declaredLen` receives the length the WIRE claimed, which is not necessarily
+  // strlen(out): the format is length-prefixed, so it can carry an embedded NUL
+  // that C string handling cannot. Callers dealing in paths MUST compare the two
+  // (see readPath in dock_session.cpp) -- a silently truncated path would have
+  // Light act on a DIFFERENT FILE than the one it was asked about.
+  bool str(char *out, size_t outCap, size_t *declaredLen = nullptr);
   bool ok() const { return ok_; }
   bool done() const { return i_ == len_; }
 
@@ -161,7 +167,14 @@ bool pathAllowed(const char *path, Op op);
 const char *rejectReason(const char *path, Op op);
 
 // ---- ARDUINO ---------------------------------------------------------------
-// Everything below touches Serial / SD / the logger.
+//
+// The protocol itself is NOT below this line -- it lives in dock_session.cpp and
+// reaches the world only through dock::Platform (include/dock_platform.h), which
+// is what lets all 47 conformance vectors replay on a laptop. Only the wiring is
+// here.
+
+// Installs the real (Serial + SD + logger) platform. Call once, in setup().
+void begin();
 
 // Drains the CDC port and services the dock. MUST be called BEFORE
 // input::poll() in the main loop: the SL_TEST_HOOK reader consumes any

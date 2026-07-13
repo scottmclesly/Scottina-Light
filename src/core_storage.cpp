@@ -458,18 +458,24 @@ bool spaceExhausted() { return s_exhausted; }
 
 namespace {
 bool s_dockSuspended = false;
+bool s_wasActiveAtDock = false;
 uint32_t s_suspendedAtMs = 0;
 } // namespace
 
 void suspendForDock() {
   if (s_dockSuspended) return;
+
+  // Suspending nothing is NOT a suspension. If no capture was running there is
+  // no gap to report and nothing to resume, and HELLO's flags must say so --
+  // claiming otherwise would have Prime print a cost that was never paid.
+  if (!s_open) {
+    s_wasActiveAtDock = false;
+    return;
+  }
+
   s_dockSuspended = true;
+  s_wasActiveAtDock = true;
   s_suspendedAtMs = millis();
-
-  // Only meaningful if a capture was actually running. If it wasn't, we still
-  // latch the flag so resume() knows not to invent a file that never existed.
-  if (!s_open) return;
-
   close(); // hands the single file handle to the dock
   Serial.println("[dock] logging suspended -- the dock needs the file handle");
 }
@@ -504,6 +510,7 @@ void resumeAfterDock() {
 }
 
 bool suspendedByDock() { return s_dockSuspended; }
+bool wasActiveAtDock() { return s_wasActiveAtDock; }
 
 } // namespace logger
 
