@@ -7,3 +7,6 @@
 .vscode/ipch
 compile_commands.json
 .DS_Store
+
+# Python bytecode from tools/
+__pycache__/

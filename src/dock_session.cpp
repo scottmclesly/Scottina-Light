@@ -326,6 +326,20 @@ void doGet(uint8_t seq, Reader &r) {
 
   const char *why = rejectReason(path, Op::Read);
   if (why) { sendError(seq, E_PATH_REJECTED, "path rejected"); return; }
+
+  // Validate the REQUEST before touching the card. A chunk larger than the
+  // max_payload we advertised in HELLO is REFUSED, not quietly clamped --
+  // clamping papers over a Prime that ignored our negotiated buffer and hands
+  // back a chunk it never asked for. The frame itself is small and well-formed,
+  // so this is ERR_TOO_LARGE, not ERR_BAD_FRAME.
+  //
+  // This check sits BEFORE exists(): an over-limit request is wrong whether or
+  // not the file happens to be there, and Light should not do I/O for a request
+  // it has already decided to refuse. (Caught on hardware -- the vector's
+  // fixture file exists, so a probe naming a missing file got ERR_NOT_FOUND
+  // instead, and the ordering never showed up in the shim.)
+  if (maxLen > MAX_PAYLOAD) { sendError(seq, E_TOO_LARGE, "too large"); return; }
+
   if (!P().sdMounted()) { sendError(seq, E_NO_SD, "no sd card"); return; }
 
   // The logger's CURRENT file is never served (§6). §6 closes it on the first
@@ -337,13 +351,7 @@ void doGet(uint8_t seq, Reader &r) {
   if (!P().exists(path)) { sendError(seq, E_NOT_FOUND, "not found"); return; }
   const uint32_t size = P().fileSize(path);
 
-  // A chunk larger than the max_payload we advertised in HELLO is REFUSED, not
-  // quietly clamped. Clamping would paper over a Prime that ignored our
-  // negotiated buffer and hand back a chunk it never asked for; the frame itself
-  // is small and well-formed, so this is ERR_TOO_LARGE, not ERR_BAD_FRAME.
-  if (maxLen > MAX_PAYLOAD) { sendError(seq, E_TOO_LARGE, "too large"); return; }
-
-  // Within that limit we may still return fewer bytes than asked: the response
+  // Within the limit we may still return fewer bytes than asked: the response
   // envelope is u32 offset + u16 len + data + u8 eof, so the data we can carry
   // is MAX_PAYLOAD minus those 7 bytes. Prime advances by the `len` we report,
   // never by the `max_len` it requested.

@@ -42,6 +42,14 @@ public:
 
   bool exists(const char *path) override {
     if (!storage::mounted()) return false;
+
+    // If we are already holding this very file open, it plainly exists -- and
+    // proving that by closing it and asking the FAT costs a full directory walk.
+    // GET calls exists() on EVERY chunk, so releasing here turned a sequential
+    // read into close/lookup/reopen/seek per kilobyte: measured at 33.9 ms per
+    // round trip, ~29 KB/s, which is ~4.7 minutes for an 8 MB log.
+    if (mode_ != Mode::None && strcmp(path_, path) == 0) return true;
+
     release();
     return SD.exists(path);
   }
@@ -113,8 +121,18 @@ public:
     if (!storage::mounted()) return -1;
     if (!openFor(path, Mode::Read)) return -1;
     if (offset >= f_.size()) return 0;
-    if (!f_.seek(offset)) return -1;
-    return f_.read(out, n);
+
+    // DO NOT trust File::seek()'s return value. It is `return f_lseek(...)`,
+    // and f_lseek returns an FRESULT where FR_OK == 0 -- so seek() reports
+    // FALSE on SUCCESS. Checking it the obvious way (`if (!seek()) fail;`)
+    // makes every read fail, which is precisely what it did on hardware: every
+    // GET came back ERR_IO while LIST worked fine.
+    //
+    // Verify the outcome instead. position() is f_tell and does not lie.
+    f_.seek(offset);
+    if (f_.position() != offset) return -1;
+
+    return (int)f_.read(out, n);
   }
 
   int appendTo(const char *path, const uint8_t *data, uint16_t n) override {
