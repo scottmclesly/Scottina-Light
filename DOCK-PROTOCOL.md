@@ -1,6 +1,6 @@
 # DOCK-PROTOCOL.md
 
-**Status:** v0.1 — DRAFT, awaiting ratification by both sides.
+**Status:** v1.0 — RATIFIED by both sides, 2026-07-12.
 **Protocol version:** `1`
 **Mirrored verbatim** in [Scottina-Light](https://github.com/scottmclesly/Scottina-Light)
 (firmware, responder) and kilodash (Prime, initiator). Neither side changes this
@@ -494,7 +494,7 @@ considered and rejected for v1: standalone logging plus clock sync covers the
 forensic case, which is the case that exists. If real-time fusion ever earns its
 keep, it is a new protocol version — not a bolt-on to this one.
 
-## Open decisions (resolve before v1.0)
+## Open decisions (ledger closed at v1.0)
 
 - [x] **VID:PID and product string** — `2886:802d`, product string
       **`Seeed Wio Terminal`**. `v1-foundation` does not rename the CDC
@@ -510,7 +510,14 @@ keep, it is a new protocol version — not a bolt-on to this one.
       bandwidth-bound (8192 sequential chunks × USB RTT is real), Light can
       advertise a larger buffer and Prime will follow without a spec change.
 - [x] **`LIST` pagination** — added pre-ratification, `proto_version` stays `1`.
-- [x] **`DELETE` timeout 30 s → 60 s** — Light's analysis (§5). **Needs Prime's
-      ack**; it is a change to Prime's client-side behavior, not to the wire.
-- [ ] **Ratification** — both sides sign off, this file drops to `v1.0`, and the
-      DRAFT banner comes off.
+- [x] **`DELETE` timeout 30 s → 60 s** — Light's analysis (§5). **Acked by
+      Prime** (kilodash `TIMEOUTS`, commit `f6accf6`); it is a change to
+      Prime's client-side behavior, not to the wire.
+- [x] **Phase-0 throughput measurement** — outstanding, and explicitly
+      **non-gating** per §3: it tunes Prime's chunk choice and progress-bar
+      math only. If it ever motivates a larger buffer, `max_payload` moves
+      without a version bump.
+- [x] **Ratification** — both sides signed off 2026-07-12: Light's frame
+      codec passes all 47 vectors as a unit test; Prime's sync engine runs
+      green against the fake Light replaying the same bytes. This file is
+      `v1.0`; the DRAFT banner is off.
