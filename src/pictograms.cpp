@@ -104,6 +104,43 @@ void gVibration(float cx, float cy, float r, uint16_t c, uint16_t bg) {
   box(cx - r - s * 0.5f, cy - s, cx - r + s * 1.5f, cy + s, c);
 }
 
+// Acoustic emission: a struck diaphragm throwing three wavefronts.
+//
+// Same construction as gVibration -- a solid mass on the left, energy leaving
+// it rightward -- so the two tiles read as siblings. Vibration carries the
+// energy as a damped wave through the body; Sound radiates it as free air.
+void gSound(float cx, float cy, float r, uint16_t c, uint16_t bg) {
+  const float lw = lwOf((int)r);
+  const float s = r * 0.30f;
+  box(cx - r - s * 0.4f, cy - s * 1.7f, cx - r + s * 1.6f, cy + s * 1.7f, c);
+
+  // Three arcs, opening right, spaced like the wave crests next door.
+  for (int i = 0; i < 3; ++i) {
+    const float rr = r * (0.42f + 0.29f * (float)i);
+    const int32_t ro = (int32_t)lroundf(rr);
+    const int32_t ri = (int32_t)fmaxf(1.0f, roundf(rr - lw));
+    // drawArc measures from 12 o'clock clockwise: 45..135 is the right quadrant.
+    g().drawArc((int32_t)lroundf(cx - r * 0.55f), (int32_t)lroundf(cy), ro, ri,
+                45, 135, c, bg, true);
+  }
+}
+
+// Luminance: a solid source with radiating output.
+//
+// Deliberately NOT gSettings' ring-with-ticks -- that one is hollow with the
+// ticks welded on. This is a filled disc whose rays stand clear of it, so the
+// pair never collide at tile size.
+void gLight(float cx, float cy, float r, uint16_t c, uint16_t bg) {
+  const float lw = lwOf((int)r);
+  dot(cx, cy, r * 0.40f, c, bg);
+  for (int a = 0; a < 360; a += 45) {
+    float ax, ay, bx, by;
+    pt(cx, cy, r * 0.62f, (float)a, ax, ay); // gap between disc and ray
+    pt(cx, cy, r * 0.98f, (float)a, bx, by);
+    wline(ax, ay, bx, by, lw, c, bg);
+  }
+}
+
 // Capture stack: a framed window with recorded bars.
 void gLogs(float cx, float cy, float r, uint16_t c, uint16_t bg) {
   const float lw = lwOf((int)r);
@@ -170,6 +207,8 @@ void draw(Glyph glyph, int cx, int cy, int r, uint16_t color, uint16_t bg) {
   case Glyph::Can: gCan(fx, fy, fr, color, bg); break;
   case Glyph::Serial: gSerial(fx, fy, fr, color, bg); break;
   case Glyph::Vibration: gVibration(fx, fy, fr, color, bg); break;
+  case Glyph::Sound: gSound(fx, fy, fr, color, bg); break;
+  case Glyph::Light: gLight(fx, fy, fr, color, bg); break;
   case Glyph::Logs: gLogs(fx, fy, fr, color, bg); break;
   case Glyph::Settings: gSettings(fx, fy, fr, color, bg); break;
   case Glyph::Knife: gKnife(fx, fy, fr, color, bg); break;

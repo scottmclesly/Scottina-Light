@@ -187,6 +187,12 @@ void tick(uint32_t nowMs);
 // holds, the test hook must not touch Serial at all.
 bool active();
 
+// One byte that tick() drained but which cannot belong to a frame, or -1 when
+// there are none. Because tick() empties the port, this is the ONLY way anyone
+// else can still see those bytes -- reading Serial directly races the drain and
+// loses. The SL_TEST_HOOK reader consumes this instead.
+int takeStray();
+
 // True while the dock has suspended the raw logger (§6). The FS layer permits
 // exactly one open file at a time, so serving a GET and logging concurrently is
 // not merely undesirable -- it is impossible.

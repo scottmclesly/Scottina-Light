@@ -25,6 +25,28 @@ bool lastLevel[BTN_N];
 uint32_t lastChange[BTN_N];
 constexpr uint32_t DEBOUNCE_MS = 25;
 
+// --- held-key auto-repeat ---------------------------------------------------
+//
+// Edge-triggered alone is fine for a menu and useless for a continuous control.
+// Dragging a threshold marker across a 138 px graph one tap at a time is a
+// hundred clicks; holding the switch has to sweep it.
+//
+// ONLY the directional keys repeat. A, B, C and PRESS are commit actions --
+// auto-repeating them would toggle a capture on and off, or grab and release a
+// marker, for as long as a thumb rested on the switch.
+bool held[BTN_N];
+uint32_t heldSince[BTN_N];
+uint32_t repeatAt[BTN_N];
+
+constexpr uint32_t REPEAT_DELAY_MS = 350; // hold this long before it starts
+constexpr uint32_t REPEAT_SLOW_MS = 140;  // first repeats, still countable
+constexpr uint32_t REPEAT_FAST_MS = 30;   // sustained hold
+constexpr uint32_t REPEAT_RAMP_MS = 900;  // slow -> fast over this long
+
+bool repeats(Btn b) {
+  return b == Btn::Up || b == Btn::Down || b == Btn::Left || b == Btn::Right;
+}
+
 } // namespace
 
 const char *btnName(Btn b) {
@@ -48,6 +70,9 @@ void begin() {
     pinMode(BTN_PINS[i].pin, INPUT_PULLUP);
     lastLevel[i] = true;
     lastChange[i] = 0;
+    held[i] = false;
+    heldSince[i] = 0;
+    repeatAt[i] = 0;
   }
 }
 
@@ -62,8 +87,13 @@ Btn poll() {
   // that behaviour is not a collision, it is a shredder. main.cpp calls
   // dock::tick() before us so frames are drained first; this guard is the
   // second lock on the same door.
-  if (!dock::active() && Serial.available()) {
-    switch (Serial.read()) {
+  //
+  // Bytes arrive via dock::takeStray() rather than Serial. tick() has already
+  // emptied the port by the time we run, so reading Serial here would race it
+  // for the same bytes and lose most of them -- measured, not theorised: four
+  // keypresses in five vanished before the fix.
+  if (!dock::active()) {
+    switch (dock::takeStray()) {
     case 'a': return Btn::A;
     case 'b': return Btn::B;
     case 'c': return Btn::C;
@@ -78,14 +108,37 @@ Btn poll() {
 #endif
 
   const uint32_t now = millis();
+
+  // Pass 1: real edges. A fresh press always wins over any pending repeat.
   for (uint8_t i = 0; i < BTN_N; ++i) {
     const bool level = digitalRead(BTN_PINS[i].pin) != 0;
     if (level == lastLevel[i]) continue;
     if (now - lastChange[i] < DEBOUNCE_MS) continue;
     lastChange[i] = now;
     lastLevel[i] = level;
-    if (!level) return BTN_PINS[i].btn; // active low: falling edge is a press
+    held[i] = !level; // active low
+    if (!level) {
+      heldSince[i] = now;
+      repeatAt[i] = now + REPEAT_DELAY_MS;
+      return BTN_PINS[i].btn; // falling edge is the press
+    }
   }
+
+  // Pass 2: a direction still held past the delay repeats, accelerating.
+  for (uint8_t i = 0; i < BTN_N; ++i) {
+    if (!held[i] || !repeats(BTN_PINS[i].btn)) continue;
+    if ((int32_t)(now - repeatAt[i]) < 0) continue;
+
+    const uint32_t heldFor = now - heldSince[i];
+    uint32_t period = REPEAT_FAST_MS;
+    if (heldFor < REPEAT_RAMP_MS) {
+      period = REPEAT_SLOW_MS -
+               (REPEAT_SLOW_MS - REPEAT_FAST_MS) * heldFor / REPEAT_RAMP_MS;
+    }
+    repeatAt[i] = now + period;
+    return BTN_PINS[i].btn;
+  }
+
   return Btn::None;
 }
 

@@ -267,10 +267,15 @@ bool present(); // last probe result, refreshed on the launcher tick
 
 Screen *launcherScreen();
 Screen *i2cScreen();
-Screen *imuScreen();
 Screen *uartScreen();
 Screen *canScreen();
 Screen *logBrowserScreen();
+
+// The three sensor loggers. All are LoggerScreen subclasses sharing one
+// pathway -- see include/logger_tile.h.
+Screen *vibrationScreen();
+Screen *soundScreen();
+Screen *lightScreen();
 
 void screensInit();
 // Re-evaluates which tiles exist. Cheap; called on the launcher tick so the

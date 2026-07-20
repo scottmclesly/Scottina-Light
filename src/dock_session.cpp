@@ -25,6 +25,12 @@ uint32_t s_lastFrameMs = 0;
 
 constexpr size_t RX_CAP = MAX_PAYLOAD + FRAME_OVERHEAD + 64;
 uint8_t s_rx[RX_CAP];
+
+// Bytes drained off the port that cannot begin a frame, held for whoever else
+// wants them (the SL_TEST_HOOK reader). Bounded and lossy on purpose: a mashed
+// thumb switch must never be able to grow this.
+uint8_t s_stray[32];
+uint8_t s_strayN = 0;
 size_t s_rxN = 0;
 uint8_t s_tx[MAX_PAYLOAD + FRAME_OVERHEAD];
 
@@ -528,9 +534,20 @@ void tick(uint32_t nowMs) {
   // Drain the port. This MUST run before input::poll(), which consumes any
   // available byte and SWALLOWS the ones it does not recognise -- pointed at a
   // frame stream that is not a collision, it is a shredder.
+  //
+  // The door locks BOTH ways, though, and for a while it did not. Draining
+  // unconditionally meant the dock ate the test hook's keystrokes too: parse()
+  // discards everything ahead of a SOF, so a keypress survived only if it
+  // happened to arrive in the window between this loop going dry and
+  // input::poll() looking. Most did not. So: while no session is up, a byte
+  // that cannot BEGIN a frame is not ours. Hand it back instead of shredding it.
   while (s_rxN < RX_CAP) {
     const int c = P().readByte();
     if (c < 0) break;
+    if (!s_active && s_rxN == 0 && (uint8_t)c != SOF) {
+      if (s_strayN < sizeof(s_stray)) s_stray[s_strayN++] = (uint8_t)c;
+      continue;
+    }
     s_rx[s_rxN++] = (uint8_t)c;
   }
 
@@ -582,6 +599,13 @@ void tick(uint32_t nowMs) {
   if (s_active && (nowMs - s_lastFrameMs) > WATCHDOG_MS) {
     endSession("watchdog -- no frame in 10s");
   }
+}
+
+int takeStray() {
+  if (s_strayN == 0) return -1;
+  const int c = s_stray[0];
+  memmove(s_stray, s_stray + 1, --s_strayN);
+  return c;
 }
 
 } // namespace dock

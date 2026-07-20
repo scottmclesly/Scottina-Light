@@ -1,6 +1,7 @@
 #include "scottina_light.h"
 
-#include "LIS3DHTR.h"
+#include "logger_tile.h"
+
 #include "SD/Seeed_SD.h"
 #include "Seeed_FS.h"
 
@@ -162,132 +163,9 @@ private:
   }
 };
 
-// ===========================================================================
-// Vibration / IMU  (TODO §8)
-// ===========================================================================
-
-class ImuScreen : public Screen {
-public:
-  const char *title() const override { return "Vibration"; }
-
-  void enter() override {
-    ui::header("Vibration", "C:back  A:log on/off  B:zero peak");
-    ui::clearBody();
-
-    m_dev = nullptr;
-    for (uint8_t i = 0; i < inventory::count; ++i) {
-      if (inventory::devs[i].cap == i2cbus::Cap::Accel) {
-        m_dev = &inventory::devs[i];
-        break;
-      }
-    }
-    if (!m_dev) {
-      ui::note(0, "no accelerometer detected", theme::c().warn);
-      return;
-    }
-    m_lis.begin(*m_dev->bus, m_dev->addr);
-    m_lis.setOutputDataRate(LIS3DHTR_DATARATE_100HZ);
-    m_lis.setFullScaleRange(LIS3DHTR_RANGE_4G);
-    m_peak = 0.0f;
-    m_traceN = 0;
-    m_next = 0;
-    drawFrame();
-  }
-
-  void exit() override {
-    if (logger::isOpen()) logger::close();
-  }
-
-  void tick(uint32_t now) override {
-    if (!m_dev || now < m_next) return;
-    m_next = now + 20; // 50 Hz refresh
-
-    float x, y, z;
-    m_lis.getAcceleration(&x, &y, &z);
-    const float mag = sqrtf(x * x + y * y + z * z);
-    const float dev = fabsf(mag - 1.0f); // deviation from rest, in g
-
-    m_sumSq = m_sumSq * 0.95f + dev * dev * 0.05f;
-    const float rms = sqrtf(m_sumSq);
-    if (dev > m_peak) m_peak = dev;
-
-    if (logger::isOpen()) {
-      char line[80];
-      snprintf(line, sizeof(line), "%lu,%.4f,%.4f,%.4f,%.4f",
-               (unsigned long)now, x, y, z, dev);
-      logger::writeLine(line);
-    }
-
-    const auto &p = theme::c();
-    char buf[48];
-    snprintf(buf, sizeof(buf), "x %+.3f  y %+.3f  z %+.3f g", x, y, z);
-    ui::note(0, buf, p.fg);
-    snprintf(buf, sizeof(buf), "RMS %.4f g   PEAK %.4f g", rms, m_peak);
-    ui::note(1, buf, p.accent);
-    snprintf(buf, sizeof(buf), "log: %s", logger::isOpen() ? logger::path() : "off");
-    ui::note(2, buf, logger::isOpen() ? p.ok : p.muted);
-
-    pushTrace(dev);
-    drawTrace();
-  }
-
-  void onButton(Btn b) override {
-    switch (b) {
-    case Btn::C: ui::pop(); break;
-    case Btn::B: m_peak = 0.0f; break;
-    case Btn::A:
-      if (logger::isOpen()) {
-        logger::close();
-      } else if (!logger::open("imu")) {
-        ui::note(2, "log open failed (no SD / no space)", theme::c().warn);
-      } else {
-        logger::writeLine("# t_ms,x_g,y_g,z_g,dev_g");
-      }
-      break;
-    default: break;
-    }
-  }
-
-private:
-  static constexpr int TRACE_W = 300;
-  static constexpr int TRACE_H = 84;
-  Detected *m_dev = nullptr;
-  LIS3DHTR<TwoWire> m_lis;
-  float m_peak = 0.0f;
-  float m_sumSq = 0.0f;
-  uint32_t m_next = 0;
-  uint8_t m_trace[TRACE_W];
-  int m_traceN = 0;
-
-  int traceX() const { return 8; }
-  int traceY() const { return ui::bodyTop() + 46; }
-
-  void drawFrame() {
-    ui::tft.drawRect(traceX() - 1, traceY() - 1, TRACE_W + 2, TRACE_H + 2,
-                     theme::c().muted);
-  }
-
-  void pushTrace(float dev) {
-    int v = (int)(dev * 2.0f * TRACE_H); // 0.5 g full scale
-    if (v > TRACE_H - 1) v = TRACE_H - 1;
-    if (m_traceN < TRACE_W) {
-      m_trace[m_traceN++] = (uint8_t)v;
-    } else {
-      memmove(m_trace, m_trace + 1, TRACE_W - 1);
-      m_trace[TRACE_W - 1] = (uint8_t)v;
-    }
-  }
-
-  void drawTrace() {
-    const auto &p = theme::c();
-    const int x0 = traceX(), y0 = traceY();
-    ui::tft.fillRect(x0, y0, TRACE_W, TRACE_H, p.bg);
-    for (int i = 0; i < m_traceN; ++i) {
-      const int h = m_trace[i];
-      if (h > 0) ui::tft.drawFastVLine(x0 + i, y0 + TRACE_H - h, h, p.ok);
-    }
-  }
-};
+// Vibration used to live here as a bespoke screen. It is now one of three
+// sensor loggers sharing a single pathway -- src/sensor_screens.cpp, built on
+// include/logger_tile.h. Adding a fourth logger belongs there, not here.
 
 // ===========================================================================
 // Serial / UART autobaud + dump  (TODO §2)
@@ -586,7 +464,6 @@ private:
 
 namespace {
 I2cScreen s_i2c;
-ImuScreen s_imu;
 UartScreen s_uart;
 CanScreen s_can;
 LogBrowserScreen s_logs;
@@ -596,25 +473,47 @@ bool availImu() { return inventory::hasCap(i2cbus::Cap::Accel); }
 bool availUart() { return true; }
 bool availCan() { return canfe::present(); }
 bool availLogs() { return storage::mounted(); }
+// Mic and light sensor are soldered to the board; there is nothing to hot-plug
+// and nothing to detect, so these two are simply always there.
+bool availOnboard() { return true; }
 
 struct Tile {
   const char *label;
-  Screen *screen;
+  // An accessor rather than a Screen*, so the table stays a genuine link-time
+  // constant even for screens that live in another translation unit.
+  Screen *(*screen)();
   pict::Glyph glyph;
   Ink ink;
   bool (*available)();
-  bool device; // hot-pluggable: draws the live badge, hides when absent
+  // The live badge, and it means exactly ONE thing: this hardware can be
+  // UNPLUGGED. The SD card lifts out; the Grove MCP2515 comes off the header.
+  //
+  // It is NOT "was detected at runtime". The LIS3DHTR is discovered by an I2C
+  // scan rather than read from a fixed ADC pin, and it wore a badge on that
+  // basis alone -- but it is soldered to the board, exactly as permanent as the
+  // mic and the light sensor beside it. That badge described how the firmware
+  // found the part, not anything the operator could act on, so it is gone.
+  //
+  // Availability is a separate mechanism: `available` still hides a tile whose
+  // hardware does not answer, badge or no badge.
+  bool device;
 };
 
 // Order and colour keys follow the mother's screen registry where a subsystem
-// exists on both. Tiles with `device` gate on their hardware, exactly like
-// Scottina's `device_key` -- the CAN tile materialises when the MCP2515 answers.
+// exists on both.
+//
+// The three sensor loggers sit together and are deliberately identical in
+// shape, size and weight -- same tile geometry, same glyph radius, same card,
+// and now no odd badge on one of them. They are one instrument with three
+// soldered-in inputs, and the grid should say so.
 const Tile TILES[] = {
-    {"I2C Scan", &s_i2c, pict::Glyph::I2c, Ink::Ok, availI2c, false},
-    {"Vibration", &s_imu, pict::Glyph::Vibration, Ink::Warn, availImu, true},
-    {"Serial", &s_uart, pict::Glyph::Serial, Ink::Muted, availUart, false},
-    {"CAN Bus", &s_can, pict::Glyph::Can, Ink::Bad, availCan, true},
-    {"Logs", &s_logs, pict::Glyph::Logs, Ink::Accent, availLogs, true},
+    {"I2C Scan", i2cScreen, pict::Glyph::I2c, Ink::Ok, availI2c, false},
+    {"Vibration", vibrationScreen, pict::Glyph::Vibration, Ink::Warn, availImu, false},
+    {"Sound", soundScreen, pict::Glyph::Sound, Ink::Accent, availOnboard, false},
+    {"Light", lightScreen, pict::Glyph::Light, Ink::Ok, availOnboard, false},
+    {"Serial", uartScreen, pict::Glyph::Serial, Ink::Muted, availUart, false},
+    {"CAN Bus", canScreen, pict::Glyph::Can, Ink::Bad, availCan, true},
+    {"Logs", logBrowserScreen, pict::Glyph::Logs, Ink::Accent, availLogs, true},
 };
 constexpr uint8_t TILE_N = sizeof(TILES) / sizeof(TILES[0]);
 
@@ -675,7 +574,7 @@ public:
       break;
     case Btn::Press:
     case Btn::A:
-      if (m_n) ui::push(m_visible[m_sel]->screen);
+      if (m_n) ui::push(m_visible[m_sel]->screen());
       break;
     case Btn::B: {
       theme::cycle();
@@ -827,10 +726,16 @@ LauncherScreen s_launcher;
 
 Screen *launcherScreen() { return &s_launcher; }
 Screen *i2cScreen() { return &s_i2c; }
-Screen *imuScreen() { return &s_imu; }
 Screen *uartScreen() { return &s_uart; }
 Screen *canScreen() { return &s_can; }
 Screen *logBrowserScreen() { return &s_logs; }
 
 void refreshAvailability() { canfe::detect(config::t3.mcp2515CsPin); }
-void screensInit() { refreshAvailability(); }
+
+void screensInit() {
+  refreshAvailability();
+  // Sound calibration is loaded at boot and SURVIVES a reboot, unlike the
+  // band thresholds which deliberately do not. Cal is painful to redo; a
+  // threshold is four seconds with a thumb switch (§4).
+  soundcal::load();
+}

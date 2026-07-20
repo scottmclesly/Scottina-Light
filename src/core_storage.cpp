@@ -34,6 +34,9 @@ bool begin() {
     // decode layer is not written -- so the dock deliberately provisions ahead
     // of its consumer. A successful table push with no visible effect is correct.
     ensureDir("/tables");
+    // Sound reference calibration (sensor loggers §4). Unlike thresholds, this
+    // is meant to survive a reboot.
+    ensureDir("/cal");
     sweepPartials();
   }
   return s_mounted;
@@ -76,12 +79,14 @@ bool ensureDir(const char *path) {
 uint8_t sweepPartials() {
   if (!s_mounted) return 0;
 
-  // Only /tables/ can hold staging files -- it is the sole writable directory
-  // the dock exposes besides /config.json, whose .partial sits at the root.
-  const char *const dirs[] = {"/tables", "/"};
+  // /tables/ is the sole writable directory the dock exposes; /config.json's
+  // .partial sits at the root; /cal/ stages the sound calibration record. All
+  // three write tmp+rename, so all three can be caught mid-write by a yank.
+  const char *const dirs[] = {"/tables", "/cal", "/"};
+  constexpr uint8_t DIR_N = sizeof(dirs) / sizeof(dirs[0]);
   uint8_t swept = 0;
 
-  for (uint8_t d = 0; d < 2; ++d) {
+  for (uint8_t d = 0; d < DIR_N; ++d) {
     // Collect first, unlink after: the one-open-file rule means we cannot hold
     // the directory handle open while removing entries out from under it.
     char doomed[8][64];
