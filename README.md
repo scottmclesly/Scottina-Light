@@ -1,5 +1,3 @@
-<img width="2567" height="1925" alt="ScottinaLight" src="https://github.com/user-attachments/assets/cb5c6ab0-3069-42e9-82da-f95d00921cec" />
-
 # Scottina Light
 
 **Pocket digital beast of burden.** A standalone diagnostics instrument for the
@@ -11,6 +9,8 @@ pictograms, navigable tiles that appear as their hardware is detected — on a
 
 It boots, scans the bus, and logs on its own. It depends on Scottina, Scottina
 Light, and CanTick for nothing.
+
+<img width="1600" height="1200" alt="scottina-light" src="https://github.com/user-attachments/assets/3e07b7ce-10bf-4acd-ba7b-3305e2d85abb" />
 
 ---
 
