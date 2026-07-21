@@ -10,9 +10,8 @@ pictograms, navigable tiles that appear as their hardware is detected — on a
 It boots, scans the bus, and logs on its own. It depends on Scottina, Scottina
 Light, and CanTick for nothing.
 
-<img width="1600" height="1200" alt="scottina-light" src="https://github.com/user-attachments/assets/3e07b7ce-10bf-4acd-ba7b-3305e2d85abb" />
+<img width="1600" height="1200" alt="scottina-light" src="https://github.com/user-attachments/assets/d9f5b574-775f-421e-a2c2-4880e8065b76" />
 
----
 
 ## Scope: diagnostics only
 
